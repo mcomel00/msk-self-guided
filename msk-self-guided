@@ -1,0 +1,1463 @@
+mkdir msk-self-guided && cd msk-self-guided
+msk-self-guided/
+  app/
+    layout.tsx
+    page.tsx
+    globals.css
+    (auth)/
+      login/
+        page.tsx
+      register/
+        page.tsx
+    api/
+      auth/
+        [...nextauth]/
+          route.ts
+      stripe/
+        checkout/
+          route.ts
+        webhook/
+          route.ts
+    dashboard/
+      page.tsx
+      intake/
+        page.tsx
+      program/
+        [trackSlug]/
+          page.tsx
+      session/
+        [sessionId]/
+          page.tsx
+      admin/
+        page.tsx
+    components/
+      Nav.tsx
+      ExerciseCard.tsx
+      PainCheck.tsx
+  lib/
+    auth.ts
+    db.ts
+    stripe.ts
+    decisionCharts.ts
+    engine.ts
+    seed.ts
+    utils.ts
+  prisma/
+    schema.prisma
+  scripts/
+    seed.ts
+  package.json
+  next.config.js
+  tsconfig.json
+  postcss.config.js
+  tailwind.config.ts
+  .env.example
+  README.md
+{
+  "name": "msk-self-guided",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "seed": "tsx scripts/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.1.0",
+    "bcryptjs": "^2.4.3",
+    "next": "^15.1.2",
+    "next-auth": "^4.24.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "stripe": "^16.12.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "prisma": "^6.1.0",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  experimental: { serverActions: { allowedOrigins: [] } }
+};
+module.exports = nextConfig;
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "jsx": "preserve",
+    "types": ["node"],
+    "incremental": true
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
+module.exports = {
+  plugins: { tailwindcss: {}, autoprefixer: {} }
+};
+import type { Config } from "tailwindcss";
+
+export default {
+  content: ["./app/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
+  theme: { extend: {} },
+  plugins: []
+} satisfies Config;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+body { @apply bg-zinc-50 text-zinc-900; }
+a { @apply text-blue-700 hover:underline; }
+.card { @apply bg-white rounded-2xl shadow-sm border border-zinc-200; }
+.btn { @apply px-4 py-2 rounded-xl bg-zinc-900 text-white hover:bg-zinc-800; }
+.input { @apply px-3 py-2 rounded-xl border border-zinc-300 bg-white; }
+.badge { @apply inline-flex items-center px-2 py-1 rounded-full text-xs border; }
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  ADMIN
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(PATIENT)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assessments  Assessment[]
+  progressLogs ProgressLog[]
+  entitlements Entitlement[]
+}
+
+model Track {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  joint       String
+  name        String
+  description String
+  createdAt   DateTime @default(now())
+
+  levels      Level[]
+  entitlements Entitlement[]
+}
+
+model Level {
+  id       String @id @default(cuid())
+  index    Int
+  trackId  String
+  track    Track  @relation(fields: [trackId], references: [id])
+
+  sessions Session[]
+  @@unique([trackId, index])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  dayIndex  Int
+  title     String
+  levelId   String
+  level     Level    @relation(fields: [levelId], references: [id])
+
+  items     SessionExercise[]
+  @@unique([levelId, dayIndex])
+}
+
+model Exercise {
+  id          String @id @default(cuid())
+  title       String
+  videoUrl    String
+  setup       String
+  cues        String
+  mistakes    String
+  troubleshooting String
+  tags        String
+
+  sessionItems SessionExercise[]
+  substitutionsFrom Substitution[] @relation("FromExercise")
+  substitutionsTo   Substitution[] @relation("ToExercise")
+}
+
+model SessionExercise {
+  id         String @id @default(cuid())
+  sessionId  String
+  exerciseId String
+  order      Int
+  prescription String
+
+  session    Session  @relation(fields: [sessionId], references: [id])
+  exercise   Exercise @relation(fields: [exerciseId], references: [id])
+  @@unique([sessionId, order])
+}
+
+model Substitution {
+  id              String @id @default(cuid())
+  fromExerciseId  String
+  toExerciseId    String
+  reasonTag       String
+
+  fromExercise Exercise @relation("FromExercise", fields: [fromExerciseId], references: [id])
+  toExercise   Exercise @relation("ToExercise", fields: [toExerciseId], references: [id])
+}
+
+model Assessment {
+  id          String   @id @default(cuid())
+  userId      String
+  joint       String
+  answersJson String
+  classification String
+  trackSlug   String
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model ProgressLog {
+  id         String   @id @default(cuid())
+  userId     String
+  sessionId  String
+  painDuring Int
+  painAfter  Int
+  nextDay    String // "GREEN" | "YELLOW" | "RED"
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id])
+  session Session @relation(fields: [sessionId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model Entitlement {
+  id         String   @id @default(cuid())
+  userId     String
+  trackId    String
+  status     String   // "ACTIVE" | "EXPIRED"
+  activeUntil DateTime?
+  stripeCustomerId String?
+  stripeSubscriptionId String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  track Track @relation(fields: [trackId], references: [id])
+
+  @@unique([userId, trackId])
+}
+DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DB?sslmode=require"
+
+NEXTAUTH_URL="http://localhost:3000"
+NEXTAUTH_SECRET="replace-with-long-random"
+
+STRIPE_SECRET_KEY="sk_test_..."
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY="pk_test_..."
+STRIPE_WEBHOOK_SECRET="whsec_..."
+
+APP_BASE_URL="http://localhost:3000"
+
+# Price IDs from Stripe
+STRIPE_PRICE_TRACK_LBP="price_..."
+STRIPE_PRICE_TRACK_SHOULDER="price_..."
+import { PrismaClient } from "@prisma/client";
+
+declare global {
+  // eslint-disable-next-line no-var
+  var prisma: PrismaClient | undefined;
+}
+
+export const prisma =
+  global.prisma ||
+  new PrismaClient({
+    log: ["error", "warn"]
+  });
+
+if (process.env.NODE_ENV !== "production") global.prisma = prisma;
+export function assertEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+export function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+import Stripe from "stripe";
+import { assertEnv } from "./utils";
+
+export const stripe = new Stripe(assertEnv("STRIPE_SECRET_KEY"), {
+  apiVersion: "2024-06-20"
+});
+import { z } from "zod";
+
+export type Joint = "LOW_BACK" | "SHOULDER";
+
+export const IntakeSchema = z.object({
+  joint: z.enum(["LOW_BACK", "SHOULDER"]),
+  // global
+  redFlags: z.boolean(),
+  painMax: z.number().int().min(0).max(10),
+  // low back
+  legPainBelowKnee: z.boolean().optional(),
+  progressiveWeakness: z.boolean().optional(),
+  worseWithFlexion: z.boolean().optional(),
+  worseWithExtension: z.boolean().optional(),
+  morningStiffnessBetterWithMove: z.boolean().optional(),
+  // shoulder
+  traumaticOnset: z.boolean().optional(),
+  deformityOrCannotLift: z.boolean().optional(),
+  neckSymptoms: z.boolean().optional(),
+  overheadPainArc: z.boolean().optional(),
+  clickingCatching: z.boolean().optional(),
+  anteriorBicepsPain: z.boolean().optional()
+});
+
+export type IntakeAnswers = z.infer<typeof IntakeSchema>;
+
+export type Classification =
+  | { kind: "URGENT"; reason: string }
+  | { kind: "EVAL_SOON"; reason: string; trackSlug?: string }
+  | { kind: "TRACK"; trackSlug: string; label: string };
+
+export function classifyIntake(a: IntakeAnswers): Classification {
+  // Global urgent
+  if (a.redFlags) return { kind: "URGENT", reason: "Red flag(s) reported. Seek urgent medical care." };
+  if (a.painMax >= 8) return { kind: "EVAL_SOON", reason: "High pain severity. Consider evaluation soon." };
+
+  if (a.joint === "LOW_BACK") {
+    const leg = !!a.legPainBelowKnee;
+    const weak = !!a.progressiveWeakness;
+
+    if (leg && weak) return { kind: "EVAL_SOON", reason: "Leg symptoms with progressive weakness. Consider evaluation soon." };
+
+    if (leg) return { kind: "TRACK", trackSlug: "lbp-irritable-radicular", label: "Low back: irritable / radicular" };
+    if (a.worseWithFlexion) return { kind: "TRACK", trackSlug: "lbp-flexion-intolerant", label: "Low back: flexion-intolerant" };
+    if (a.worseWithExtension) return { kind: "TRACK", trackSlug: "lbp-extension-intolerant", label: "Low back: extension-intolerant" };
+    if (a.morningStiffnessBetterWithMove) return { kind: "TRACK", trackSlug: "lbp-persistent-recurrent", label: "Low back: persistent/recurrent" };
+
+    return { kind: "TRACK", trackSlug: "lbp-persistent-recurrent", label: "Low back: general capacity track" };
+  }
+
+  if (a.joint === "SHOULDER") {
+    if (a.traumaticOnset && a.deformityOrCannotLift) {
+      return { kind: "URGENT", reason: "Traumatic onset with inability to lift/deformity. Seek urgent evaluation." };
+    }
+    if (a.neckSymptoms) return { kind: "EVAL_SOON", reason: "Neck/arm symptoms present. Consider evaluation soon." };
+
+    if (a.anteriorBicepsPain) return { kind: "TRACK", trackSlug: "shoulder-anterior-biceps", label: "Shoulder: anterior/biceps" };
+    if (a.clickingCatching) return { kind: "EVAL_SOON", reason: "Clicking/catching may need evaluation if not improving.", trackSlug: "shoulder-stability-guardrails" };
+    if (a.overheadPainArc) return { kind: "TRACK", trackSlug: "shoulder-cuff-capacity", label: "Shoulder: rotator cuff capacity" };
+
+    return { kind: "TRACK", trackSlug: "shoulder-mobility-control", label: "Shoulder: mobility + control" };
+  }
+
+  return { kind: "EVAL_SOON", reason: "Unable to classify." };
+}
+import { clamp } from "./utils";
+
+export type NextDay = "GREEN" | "YELLOW" | "RED";
+
+export function determineNextDay(painDuring: number, painAfter: number): NextDay {
+  // conservative blend: use max of the two
+  const p = Math.max(painDuring, painAfter);
+  if (p <= 3) return "GREEN";
+  if (p <= 5) return "YELLOW";
+  return "RED";
+}
+
+export function nextLevelIndex(current: number, recent: NextDay[]): number {
+  // recent[0] is most recent
+  const last = recent[0];
+  const prev = recent[1];
+
+  if (last === "RED") return clamp(current - 1, 0, 99);
+  if (last === "YELLOW") return current;
+
+  // GREEN
+  if (prev === "GREEN") return current + 1;
+  return current; // need 2 greens in a row to progress
+}
+import type { NextAuthOptions } from "next-auth";
+import Credentials from "next-auth/providers/credentials";
+import bcrypt from "bcryptjs";
+import { prisma } from "./db";
+
+export const authOptions: NextAuthOptions = {
+  session: { strategy: "jwt" },
+  providers: [
+    Credentials({
+      name: "Credentials",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" }
+      },
+      async authorize(credentials) {
+        const email = credentials?.email?.toLowerCase().trim();
+        const password = credentials?.password ?? "";
+        if (!email || !password) return null;
+
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user) return null;
+
+        const ok = await bcrypt.compare(password, user.passwordHash);
+        if (!ok) return null;
+
+        return { id: user.id, email: user.email, role: user.role };
+      }
+    })
+  ],
+  callbacks: {
+    async jwt({ token, user }) {
+      if (user) {
+        // @ts-expect-error
+        token.role = (user as any).role;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      // @ts-expect-error
+      session.user.role = token.role;
+      return session;
+    }
+  },
+  pages: {
+    signIn: "/login"
+  }
+};
+import NextAuth from "next-auth";
+import { authOptions } from "@/lib/auth";
+
+const handler = NextAuth(authOptions);
+export { handler as GET, handler as POST };
+import { NextResponse } from "next/server";
+import { stripe } from "@/lib/stripe";
+import { assertEnv } from "@/lib/utils";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+
+export async function POST(req: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { trackSlug } = await req.json();
+  if (!trackSlug) return NextResponse.json({ error: "Missing trackSlug" }, { status: 400 });
+
+  const track = await prisma.track.findUnique({ where: { slug: trackSlug } });
+  if (!track) return NextResponse.json({ error: "Track not found" }, { status: 404 });
+
+  // Map slug -> Stripe Price ID env var (simple MVP)
+  const priceMap: Record<string, string | undefined> = {
+    "lbp-persistent-recurrent": process.env.STRIPE_PRICE_TRACK_LBP,
+    "lbp-irritable-radicular": process.env.STRIPE_PRICE_TRACK_LBP,
+    "lbp-flexion-intolerant": process.env.STRIPE_PRICE_TRACK_LBP,
+    "lbp-extension-intolerant": process.env.STRIPE_PRICE_TRACK_LBP,
+    "shoulder-cuff-capacity": process.env.STRIPE_PRICE_TRACK_SHOULDER,
+    "shoulder-mobility-control": process.env.STRIPE_PRICE_TRACK_SHOULDER,
+    "shoulder-anterior-biceps": process.env.STRIPE_PRICE_TRACK_SHOULDER,
+    "shoulder-stability-guardrails": process.env.STRIPE_PRICE_TRACK_SHOULDER
+  };
+
+  const priceId = priceMap[trackSlug];
+  if (!priceId) return NextResponse.json({ error: "No Stripe price configured for this track" }, { status: 500 });
+
+  const baseUrl = process.env.APP_BASE_URL || assertEnv("NEXTAUTH_URL");
+  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!user) return NextResponse.json({ error: "User missing" }, { status: 500 });
+
+  const checkout = await stripe.checkout.sessions.create({
+    mode: "payment",
+    customer_email: user.email,
+    line_items: [{ price: priceId, quantity: 1 }],
+    success_url: `${baseUrl}/dashboard?success=1`,
+    cancel_url: `${baseUrl}/dashboard?canceled=1`,
+    metadata: {
+      userId: user.id,
+      trackId: track.id
+    }
+  });
+
+  return NextResponse.json({ url: checkout.url });
+}
+import { NextResponse } from "next/server";
+import { stripe } from "@/lib/stripe";
+import { assertEnv } from "@/lib/utils";
+import { prisma } from "@/lib/db";
+
+export async function POST(req: Request) {
+  const sig = req.headers.get("stripe-signature");
+  const whsec = assertEnv("STRIPE_WEBHOOK_SECRET");
+  const body = await req.text();
+
+  if (!sig) return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(body, sig, whsec);
+  } catch (err: any) {
+    return NextResponse.json({ error: `Webhook error: ${err.message}` }, { status: 400 });
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const cs = event.data.object as any;
+    const userId = cs?.metadata?.userId as string | undefined;
+    const trackId = cs?.metadata?.trackId as string | undefined;
+    if (userId && trackId) {
+      // Grant entitlement for 365 days (MVP); change to subscription later
+      const activeUntil = new Date();
+      activeUntil.setDate(activeUntil.getDate() + 365);
+
+      await prisma.entitlement.upsert({
+        where: { userId_trackId: { userId, trackId } },
+        create: {
+          userId,
+          trackId,
+          status: "ACTIVE",
+          activeUntil,
+          stripeCustomerId: cs.customer ?? null
+        },
+        update: {
+          status: "ACTIVE",
+          activeUntil
+        }
+      });
+    }
+  }
+
+  return NextResponse.json({ received: true });
+}
+import "./globals.css";
+import Nav from "./components/Nav";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <Nav />
+        <main className="max-w-5xl mx-auto p-4">{children}</main>
+      </body>
+    </html>
+  );
+}
+"use client";
+
+import { signOut, useSession } from "next-auth/react";
+
+export default function Nav() {
+  const { data } = useSession();
+  return (
+    <header className="border-b border-zinc-200 bg-white">
+      <div className="max-w-5xl mx-auto p-4 flex items-center justify-between">
+        <div className="font-semibold">MSK Self-Guided</div>
+        <nav className="flex items-center gap-3 text-sm">
+          <a href="/">Home</a>
+          <a href="/dashboard">Dashboard</a>
+          {!data?.user ? (
+            <>
+              <a href="/login">Login</a>
+              <a href="/register">Register</a>
+            </>
+          ) : (
+            <button className="btn" onClick={() => signOut({ callbackUrl: "/" })}>
+              Sign out
+            </button>
+          )}
+        </nav>
+      </div>
+    </header>
+  );
+}
+export default function Home() {
+  return (
+    <div className="space-y-4">
+      <div className="card p-6">
+        <h1 className="text-2xl font-semibold">Self-guided programs for common MSK pain</h1>
+        <p className="mt-2 text-zinc-700">
+          Educational intake → track selection → daily sessions with video, cues, troubleshooting,
+          and progression/regression based on a 24-hour response model.
+        </p>
+        <div className="mt-4 flex gap-3">
+          <a className="btn" href="/register">Get started</a>
+          <a className="btn" href="/login">Login</a>
+        </div>
+      </div>
+
+      <div className="card p-6">
+        <h2 className="text-lg font-semibold">Safety note</h2>
+        <p className="text-zinc-700 mt-2">
+          This app provides general educational exercise guidance and is not a diagnosis.
+          If you have red-flag symptoms (severe or worsening neurologic symptoms, bowel/bladder changes,
+          major trauma, fever, unexplained weight loss), seek urgent medical care.
+        </p>
+      </div>
+    </div>
+  );
+}
+"use client";
+
+import { useState } from "react";
+
+export default function Register() {
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+
+    const res = await fetch("/api/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password: pw })
+    });
+    const json = await res.json();
+    if (!res.ok) setMsg(json.error || "Registration failed");
+    else setMsg("Registered. You can now login.");
+  }
+
+  return (
+    <div className="card p-6 max-w-md">
+      <h1 className="text-xl font-semibold">Register</h1>
+      <form className="mt-4 space-y-3" onSubmit={onSubmit}>
+        <input className="input w-full" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
+        <input className="input w-full" placeholder="Password" type="password" value={pw} onChange={e => setPw(e.target.value)} />
+        <button className="btn w-full" type="submit">Create account</button>
+      </form>
+      {msg && <p className="mt-3 text-sm">{msg}</p>}
+      <p className="mt-3 text-sm">Already have an account? <a href="/login">Login</a></p>
+    </div>
+  );
+}
+"use client";
+
+import { signIn } from "next-auth/react";
+import { useState } from "react";
+
+export default function Login() {
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    const res = await signIn("credentials", {
+      email,
+      password: pw,
+      redirect: true,
+      callbackUrl: "/dashboard"
+    });
+    // NextAuth handles redirect; if it fails it returns error in querystring
+    void res;
+  }
+
+  return (
+    <div className="card p-6 max-w-md">
+      <h1 className="text-xl font-semibold">Login</h1>
+      <form className="mt-4 space-y-3" onSubmit={onSubmit}>
+        <input className="input w-full" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
+        <input className="input w-full" placeholder="Password" type="password" value={pw} onChange={e => setPw(e.target.value)} />
+        <button className="btn w-full" type="submit">Sign in</button>
+      </form>
+      {msg && <p className="mt-3 text-sm">{msg}</p>}
+      <p className="mt-3 text-sm">No account? <a href="/register">Register</a></p>
+    </div>
+  );
+}
+import { NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
+import { prisma } from "@/lib/db";
+
+export async function POST(req: Request) {
+  const { email, password } = await req.json();
+
+  const e = String(email || "").toLowerCase().trim();
+  const p = String(password || "");
+
+  if (!e.includes("@")) return NextResponse.json({ error: "Invalid email" }, { status: 400 });
+  if (p.length < 8) return NextResponse.json({ error: "Password must be at least 8 characters" }, { status: 400 });
+
+  const exists = await prisma.user.findUnique({ where: { email: e } });
+  if (exists) return NextResponse.json({ error: "Email already registered" }, { status: 409 });
+
+  const passwordHash = await bcrypt.hash(p, 12);
+  await prisma.user.create({ data: { email: e, passwordHash } });
+
+  return NextResponse.json({ ok: true });
+}
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+
+export default async function Dashboard() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) {
+    return (
+      <div className="card p-6">
+        <p>You’re not logged in. <a href="/login">Login</a></p>
+      </div>
+    );
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email: session.user.email },
+    include: { entitlements: { include: { track: true } }, assessments: { orderBy: { createdAt: "desc" }, take: 1 } }
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-6">
+        <h1 className="text-xl font-semibold">Dashboard</h1>
+        <p className="text-zinc-700 mt-1">Welcome, {user?.email}</p>
+        <div className="mt-4 flex gap-3">
+          <a className="btn" href="/dashboard/intake">Start intake</a>
+        </div>
+      </div>
+
+      <div className="card p-6">
+        <h2 className="font-semibold">Your access</h2>
+        <div className="mt-2 space-y-2">
+          {user?.entitlements?.length ? (
+            user.entitlements.map(e => (
+              <div key={e.id} className="flex items-center justify-between">
+                <div>
+                  <div className="font-medium">{e.track.name}</div>
+                  <div className="text-sm text-zinc-600">
+                    Status: {e.status}{e.activeUntil ? ` • until ${new Date(e.activeUntil).toLocaleDateString()}` : ""}
+                  </div>
+                </div>
+                <a className="btn" href={`/dashboard/program/${e.track.slug}`}>Open</a>
+              </div>
+            ))
+          ) : (
+            <p className="text-zinc-700 text-sm">No purchased tracks yet.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="card p-6">
+        <h2 className="font-semibold">Admin</h2>
+        {/* @ts-expect-error */}
+        {session.user.role === "ADMIN" ? (
+          <a className="btn mt-2 inline-block" href="/dashboard/admin">Admin panel</a>
+        ) : (
+          <p className="text-sm text-zinc-600 mt-2">Admin panel is restricted.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+"use client";
+
+import { useState } from "react";
+import { IntakeAnswers, IntakeSchema, classifyIntake } from "@/lib/decisionCharts";
+
+type Joint = "LOW_BACK" | "SHOULDER";
+
+export default function Intake() {
+  const [joint, setJoint] = useState<Joint>("LOW_BACK");
+  const [redFlags, setRedFlags] = useState(false);
+  const [painMax, setPainMax] = useState(4);
+
+  // LBP
+  const [legPainBelowKnee, setLegPainBelowKnee] = useState(false);
+  const [progressiveWeakness, setProgressiveWeakness] = useState(false);
+  const [worseWithFlexion, setWorseWithFlexion] = useState(false);
+  const [worseWithExtension, setWorseWithExtension] = useState(false);
+  const [morningStiffnessBetterWithMove, setMorningStiffnessBetterWithMove] = useState(false);
+
+  // Shoulder
+  const [traumaticOnset, setTraumaticOnset] = useState(false);
+  const [deformityOrCannotLift, setDeformityOrCannotLift] = useState(false);
+  const [neckSymptoms, setNeckSymptoms] = useState(false);
+  const [overheadPainArc, setOverheadPainArc] = useState(true);
+  const [clickingCatching, setClickingCatching] = useState(false);
+  const [anteriorBicepsPain, setAnteriorBicepsPain] = useState(false);
+
+  const [result, setResult] = useState<any>(null);
+
+  async function submit() {
+    const payload: IntakeAnswers = {
+      joint,
+      redFlags,
+      painMax,
+      legPainBelowKnee,
+      progressiveWeakness,
+      worseWithFlexion,
+      worseWithExtension,
+      morningStiffnessBetterWithMove,
+      traumaticOnset,
+      deformityOrCannotLift,
+      neckSymptoms,
+      overheadPainArc,
+      clickingCatching,
+      anteriorBicepsPain
+    };
+
+    const parsed = IntakeSchema.safeParse(payload);
+    if (!parsed.success) {
+      setResult({ kind: "ERROR", reason: parsed.error.message });
+      return;
+    }
+
+    const c = classifyIntake(parsed.data);
+    setResult(c);
+
+    // store assessment server-side
+    await fetch("/api/intake", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answers: parsed.data, classification: c })
+    });
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-6">
+        <h1 className="text-xl font-semibold">Intake</h1>
+        <p className="text-sm text-zinc-700 mt-1">
+          Answer a few questions to choose a self-guided program track.
+        </p>
+
+        <div className="mt-4 grid gap-3">
+          <label className="text-sm">
+            Joint
+            <select className="input w-full mt-1" value={joint} onChange={e => setJoint(e.target.value as Joint)}>
+              <option value="LOW_BACK">Low back</option>
+              <option value="SHOULDER">Shoulder</option>
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={redFlags} onChange={e => setRedFlags(e.target.checked)} />
+            Any red-flag symptoms (bowel/bladder change, major trauma, fever, etc.)
+          </label>
+
+          <label className="text-sm">
+            Max pain (0–10)
+            <input className="input w-full mt-1" type="number" min={0} max={10} value={painMax} onChange={e => setPainMax(Number(e.target.value))} />
+          </label>
+
+          {joint === "LOW_BACK" && (
+            <div className="grid gap-2 text-sm">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={legPainBelowKnee} onChange={e => setLegPainBelowKnee(e.target.checked)} />
+                Leg pain below the knee (or tingling/numbness)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={progressiveWeakness} onChange={e => setProgressiveWeakness(e.target.checked)} />
+                Progressive weakness (getting worse)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={worseWithFlexion} onChange={e => setWorseWithFlexion(e.target.checked)} />
+                Worse with sitting/bending (flexion)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={worseWithExtension} onChange={e => setWorseWithExtension(e.target.checked)} />
+                Worse with standing/walking (extension)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={morningStiffnessBetterWithMove} onChange={e => setMorningStiffnessBetterWithMove(e.target.checked)} />
+                Morning stiffness that improves with movement
+              </label>
+            </div>
+          )}
+
+          {joint === "SHOULDER" && (
+            <div className="grid gap-2 text-sm">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={traumaticOnset} onChange={e => setTraumaticOnset(e.target.checked)} />
+                Sudden/traumatic onset
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={deformityOrCannotLift} onChange={e => setDeformityOrCannotLift(e.target.checked)} />
+                Deformity or cannot lift arm
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={neckSymptoms} onChange={e => setNeckSymptoms(e.target.checked)} />
+                Neck/arm symptoms (tingling/numbness)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={overheadPainArc} onChange={e => setOverheadPainArc(e.target.checked)} />
+                Overhead pain arc / lateral shoulder pain
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={clickingCatching} onChange={e => setClickingCatching(e.target.checked)} />
+                Clicking/catching/deep joint pain
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={anteriorBicepsPain} onChange={e => setAnteriorBicepsPain(e.target.checked)} />
+                Front shoulder/biceps groove pain
+              </label>
+            </div>
+          )}
+
+          <button className="btn" onClick={submit}>Get my track</button>
+        </div>
+      </div>
+
+      {result && (
+        <div className="card p-6">
+          <div className="font-semibold">Result</div>
+          <pre className="text-sm mt-2 whitespace-pre-wrap">{JSON.stringify(result, null, 2)}</pre>
+
+          {result.kind === "TRACK" && (
+            <div className="mt-4 flex gap-3">
+              <a className="btn" href={`/dashboard/program/${result.trackSlug}`}>Open program</a>
+              <PayButton trackSlug={result.trackSlug} />
+            </div>
+          )}
+
+          {result.kind === "EVAL_SOON" && result.trackSlug && (
+            <div className="mt-4 flex gap-3">
+              <a className="btn" href={`/dashboard/program/${result.trackSlug}`}>Open cautious track</a>
+              <PayButton trackSlug={result.trackSlug} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PayButton({ trackSlug }: { trackSlug: string }) {
+  async function goPay() {
+    const res = await fetch("/api/stripe/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ trackSlug })
+    });
+    const json = await res.json();
+    if (json.url) window.location.href = json.url;
+    else alert(json.error || "Payment error");
+  }
+  return <button className="btn" onClick={goPay}>Unlock (Pay)</button>;
+}
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+
+export async function POST(req: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { answers, classification } = await req.json();
+  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!user) return NextResponse.json({ error: "User missing" }, { status: 500 });
+
+  const trackSlug =
+    classification?.trackSlug ||
+    (classification?.kind === "TRACK" ? classification.trackSlug : null) ||
+    "";
+
+  await prisma.assessment.create({
+    data: {
+      userId: user.id,
+      joint: answers.joint,
+      answersJson: JSON.stringify(answers),
+      classification: JSON.stringify(classification),
+      trackSlug
+    }
+  });
+
+  return NextResponse.json({ ok: true });
+}
+import { prisma } from "@/lib/db";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+
+export default async function Program({ params }: { params: { trackSlug: string } }) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) return <div className="card p-6">Please <a href="/login">login</a>.</div>;
+
+  const user = await prisma.user.findUnique({ where: { email: session.user.email }, include: { entitlements: true } });
+  if (!user) return <div className="card p-6">User missing.</div>;
+
+  const track = await prisma.track.findUnique({
+    where: { slug: params.trackSlug },
+    include: { levels: { include: { sessions: true }, orderBy: { index: "asc" } } }
+  });
+  if (!track) return <div className="card p-6">Track not found.</div>;
+
+  const entitlement = await prisma.entitlement.findUnique({
+    where: { userId_trackId: { userId: user.id, trackId: track.id } }
+  });
+  const hasAccess = entitlement?.status === "ACTIVE" && (!entitlement.activeUntil || entitlement.activeUntil > new Date());
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-6">
+        <h1 className="text-xl font-semibold">{track.name}</h1>
+        <p className="text-zinc-700 mt-1">{track.description}</p>
+        <div className="mt-3">
+          {hasAccess ? (
+            <span className="badge border-green-300 bg-green-50">Unlocked</span>
+          ) : (
+            <span className="badge border-amber-300 bg-amber-50">Locked</span>
+          )}
+        </div>
+
+        {!hasAccess && (
+          <div className="mt-4">
+            <form action="/api/stripe/checkout" method="post">
+              <p className="text-sm text-zinc-700 mb-2">Unlock this track to access sessions.</p>
+              {/* client fetch is used in Intake; here we show link back */}
+              <a className="btn" href="/dashboard/intake">Go to Intake → Unlock</a>
+            </form>
+          </div>
+        )}
+      </div>
+
+      <div className="card p-6">
+        <h2 className="font-semibold">Sessions</h2>
+        <div className="mt-3 space-y-3">
+          {track.levels.flatMap(l =>
+            l.sessions
+              .sort((a, b) => a.dayIndex - b.dayIndex)
+              .map(s => (
+                <div key={s.id} className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">Level {l.index} • Day {s.dayIndex}: {s.title}</div>
+                  </div>
+                  {hasAccess ? (
+                    <a className="btn" href={`/dashboard/session/${s.id}`}>Start</a>
+                  ) : (
+                    <span className="text-sm text-zinc-600">Locked</span>
+                  )}
+                </div>
+              ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+export default function ExerciseCard(props: {
+  title: string;
+  videoUrl: string;
+  setup: string;
+  cues: string;
+  mistakes: string;
+  troubleshooting: string;
+  prescription: string;
+}) {
+  return (
+    <div className="card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-semibold">{props.title}</div>
+          <div className="text-sm text-zinc-700 mt-1">{props.prescription}</div>
+        </div>
+        <a className="badge border-zinc-300 bg-zinc-50" href={props.videoUrl} target="_blank" rel="noreferrer">
+          Video
+        </a>
+      </div>
+
+      <div className="mt-3 grid gap-2 text-sm">
+        <div><span className="font-medium">Setup:</span> {props.setup}</div>
+        <div><span className="font-medium">Cues:</span> {props.cues}</div>
+        <div><span className="font-medium">Common mistakes:</span> {props.mistakes}</div>
+        <div><span className="font-medium">If this hurts / troubleshooting:</span> {props.troubleshooting}</div>
+      </div>
+    </div>
+  );
+}
+"use client";
+
+import { useState } from "react";
+import { determineNextDay } from "@/lib/engine";
+
+export default function PainCheck({ sessionId }: { sessionId: string }) {
+  const [painDuring, setPainDuring] = useState(2);
+  const [painAfter, setPainAfter] = useState(2);
+  const [notes, setNotes] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function submit() {
+    const nextDay = determineNextDay(painDuring, painAfter);
+    const res = await fetch("/api/progress", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId, painDuring, painAfter, nextDay, notes })
+    });
+    const json = await res.json();
+    if (!res.ok) setMsg(json.error || "Error saving");
+    else setMsg(`Saved. Next-day status: ${nextDay}`);
+  }
+
+  return (
+    <div className="card p-4">
+      <div className="font-semibold">Pain check</div>
+      <div className="grid gap-3 mt-3 text-sm">
+        <label>
+          Pain during (0–10)
+          <input className="input w-full mt-1" type="number" min={0} max={10} value={painDuring} onChange={e => setPainDuring(Number(e.target.value))} />
+        </label>
+        <label>
+          Pain after (0–10)
+          <input className="input w-full mt-1" type="number" min={0} max={10} value={painAfter} onChange={e => setPainAfter(Number(e.target.value))} />
+        </label>
+        <label>
+          Notes (optional)
+          <input className="input w-full mt-1" value={notes} onChange={e => setNotes(e.target.value)} />
+        </label>
+        <button className="btn" onClick={submit}>Save</button>
+        {msg && <div>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+
+export async function POST(req: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { sessionId, painDuring, painAfter, nextDay, notes } = await req.json();
+
+  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!user) return NextResponse.json({ error: "User missing" }, { status: 500 });
+
+  await prisma.progressLog.create({
+    data: {
+      userId: user.id,
+      sessionId,
+      painDuring: Number(painDuring),
+      painAfter: Number(painAfter),
+      nextDay: String(nextDay),
+      notes: notes ? String(notes) : null
+    }
+  });
+
+  return NextResponse.json({ ok: true });
+}
+import { prisma } from "@/lib/db";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import ExerciseCard from "@/app/components/ExerciseCard";
+import PainCheck from "@/app/components/PainCheck";
+
+export default async function SessionPage({ params }: { params: { sessionId: string } }) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) return <div className="card p-6">Please <a href="/login">login</a>.</div>;
+
+  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!user) return <div className="card p-6">User missing.</div>;
+
+  const s = await prisma.session.findUnique({
+    where: { id: params.sessionId },
+    include: {
+      level: { include: { track: true } },
+      items: { include: { exercise: true }, orderBy: { order: "asc" } }
+    }
+  });
+  if (!s) return <div className="card p-6">Session not found.</div>;
+
+  // Access gate
+  const ent = await prisma.entitlement.findUnique({
+    where: { userId_trackId: { userId: user.id, trackId: s.level.track.id } }
+  });
+  const hasAccess = ent?.status === "ACTIVE" && (!ent.activeUntil || ent.activeUntil > new Date());
+  if (!hasAccess) return <div className="card p-6">Locked. <a href={`/dashboard/program/${s.level.track.slug}`}>Go back</a>.</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-6">
+        <div className="text-sm text-zinc-600">{s.level.track.name} • Level {s.level.index} • Day {s.dayIndex}</div>
+        <h1 className="text-xl font-semibold mt-1">{s.title}</h1>
+      </div>
+
+      <div className="space-y-3">
+        {s.items.map(item => (
+          <ExerciseCard
+            key={item.id}
+            title={item.exercise.title}
+            videoUrl={item.exercise.videoUrl}
+            setup={item.exercise.setup}
+            cues={item.exercise.cues}
+            mistakes={item.exercise.mistakes}
+            troubleshooting={item.exercise.troubleshooting}
+            prescription={item.prescription}
+          />
+        ))}
+      </div>
+
+      <PainCheck sessionId={s.id} />
+    </div>
+  );
+}
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+
+export default async function Admin() {
+  const session = await getServerSession(authOptions);
+  // @ts-expect-error
+  if (!session?.user?.email || session.user.role !== "ADMIN") {
+    return <div className="card p-6">Unauthorized.</div>;
+  }
+
+  const tracks = await prisma.track.findMany({ include: { levels: true } });
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-6">
+        <h1 className="text-xl font-semibold">Admin</h1>
+        <p className="text-zinc-700 mt-1">Seeded tracks/levels. Next step is a full program builder UI.</p>
+      </div>
+
+      <div className="card p-6">
+        <h2 className="font-semibold">Tracks</h2>
+        <div className="mt-3 space-y-2">
+          {tracks.map(t => (
+            <div key={t.id} className="flex items-center justify-between">
+              <div>
+                <div className="font-medium">{t.name}</div>
+                <div className="text-sm text-zinc-600">{t.slug} • {t.joint} • Levels: {t.levels.length}</div>
+              </div>
+              <a className="btn" href={`/dashboard/program/${t.slug}`}>View</a>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+import { prisma } from "../lib/db";
+import bcrypt from "bcryptjs";
+
+async function main() {
+  // Admin user
+  const adminEmail = "admin@example.com";
+  const adminPw = "ChangeThisPassword123!";
+  const adminHash = await bcrypt.hash(adminPw, 12);
+
+  await prisma.user.upsert({
+    where: { email: adminEmail },
+    create: { email: adminEmail, passwordHash: adminHash, role: "ADMIN" },
+    update: {}
+  });
+
+  // Exercises (use your own hosted videos later)
+  const ex = {
+    mcgillCurlUp: await prisma.exercise.upsert({
+      where: { id: "mcgill-curl-up" },
+      create: {
+        id: "mcgill-curl-up",
+        title: "McGill Curl-Up",
+        videoUrl: "https://www.youtube.com/watch?v=ZQp2w0bD8uY",
+        setup: "One knee bent, hands under low back for neutral support.",
+        cues: "Brace, lift head/shoulders slightly without rounding; slow breathing.",
+        mistakes: "Cranking neck; big sit-up; losing neutral spine.",
+        troubleshooting: "If it increases back pain, reduce ROM or switch to dead bug heel taps.",
+        tags: "LOW_BACK,CORE"
+      },
+      update: {}
+    }),
+    birdDog: await prisma.exercise.upsert({
+      where: { id: "bird-dog" },
+      create: {
+        id: "bird-dog",
+        title: "Bird Dog",
+        videoUrl: "https://www.youtube.com/watch?v=wiFNA3sqjCA",
+        setup: "Hands under shoulders, knees under hips.",
+        cues: "Reach long; keep hips level; exhale and brace.",
+        mistakes: "Rotating hips; arching low back; rushing reps.",
+        troubleshooting: "If wrist pain, do forearms; if back pain, shorten lever.",
+        tags: "LOW_BACK,CORE"
+      },
+      update: {}
+    }),
+    bandER: await prisma.exercise.upsert({
+      where: { id: "band-er" },
+      create: {
+        id: "band-er",
+        title: "Band External Rotation (elbow at side)",
+        videoUrl: "https://www.youtube.com/watch?v=0j1i8KpQy7o",
+        setup: "Elbow at side with towel roll; band anchored.",
+        cues: "Rotate out slowly; keep shoulder blade gently set; no shrug.",
+        mistakes: "Elbow flaring; shrugging; quick reps.",
+        troubleshooting: "If pinch at front, reduce range or swap to isometric ER holds.",
+        tags: "SHOULDER,ROTATOR_CUFF"
+      },
+      update: {}
+    }),
+    scapRow: await prisma.exercise.upsert({
+      where: { id: "scap-row" },
+      create: {
+        id: "scap-row",
+        title: "Scapular Row (band)",
+        videoUrl: "https://www.youtube.com/watch?v=GZbfZ033f74",
+        setup: "Band anchored chest height; tall posture.",
+        cues: "Pull elbows back; pause; feel mid-back; avoid shrug.",
+        mistakes: "Ribs flaring; shrugging; leaning back.",
+        troubleshooting: "If neck tight, reduce tension and focus on low traps.",
+        tags: "SHOULDER,SCAPULA"
+      },
+      update: {}
+    })
+  };
+
+  // Tracks
+  const lbp = await prisma.track.upsert({
+    where: { slug: "lbp-persistent-recurrent" },
+    create: {
+      slug: "lbp-persistent-recurrent",
+      joint: "LOW_BACK",
+      name: "Low Back — Persistent/Recurrent Capacity Track",
+      description: "Graded exposure + trunk/hip capacity using a 24-hour response progression model."
+    },
+    update: {}
+  });
+
+  const shoulder = await prisma.track.upsert({
+    where: { slug: "shoulder-cuff-capacity" },
+    create: {
+      slug: "shoulder-cuff-capacity",
+      joint: "SHOULDER",
+      name: "Shoulder — Rotator Cuff Capacity Track",
+      description: "Scapular control + rotator cuff endurance progressing toward overhead tolerance."
+    },
+    update: {}
+  });
+
+  // Levels + sessions
+  async function makeLevel(trackId: string, index: number, sessionTitles: string[]) {
+    const level = await prisma.level.upsert({
+      where: { trackId_index: { trackId, index } },
+      create: { trackId, index },
+      update: {}
+    });
+
+    for (let i = 0; i < sessionTitles.length; i++) {
+      await prisma.session.upsert({
+        where: { levelId_dayIndex: { levelId: level.id, dayIndex: i + 1 } },
+        create: {
+          levelId: level.id,
+          dayIndex: i + 1,
+          title: sessionTitles[i]
+        },
+        update: {}
+      });
+    }
+    return level;
+  }
+
+  const lbpL0 = await makeLevel(lbp.id, 0, ["Calm + stabilize", "Stabilize + walk", "Rebuild basics"]);
+  const shL0 = await makeLevel(shoulder.id, 0, ["Calm + control", "Cuff endurance", "Scap strength"]);
+
+  // Attach exercises to sessions
+  async function add(sessionTitle: string, levelId: string, items: { exerciseId: string; order: number; prescription: string }[]) {
+    const s = await prisma.session.findFirst({ where: { levelId, title: sessionTitle } });
+    if (!s) throw new Error(`Missing session: ${sessionTitle}`);
+
+    for (const item of items) {
+      await prisma.sessionExercise.upsert({
+        where: { sessionId_order: { sessionId: s.id, order: item.order } } as any,
+        create: {
+          sessionId: s.id,
+          exerciseId: item.exerciseId,
+          order: item.order,
+          prescription: item.prescription
+        },
+        update: {
+          exerciseId: item.exerciseId,
+          prescription: item.prescription
+        }
+      });
+    }
+  }
+
+  await add("Calm + stabilize", lbpL0.id, [
+    { exerciseId: ex.mcgillCurlUp.id, order: 1, prescription: "2–3 sets of 6–8 reps (slow) • Rest 30–45s" },
+    { exerciseId: ex.birdDog.id, order: 2, prescription: "2–3 sets of 6/side • 2–3s holds" }
+  ]);
+
+  await add("Calm + control", shL0.id, [
+    { exerciseId: ex.bandER.id, order: 1, prescription: "3 sets of 10–15/side • easy/moderate band" },
+    { exerciseId: ex.scapRow.id, order: 2, prescription: "3 sets of 10–15 • pause 1s at back" }
+  ]);
+
+  console.log("Seed complete.");
+  console.log(`Admin login: ${adminEmail} / ${adminPw}`);
+}
+
+main()
+  .catch(e => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
+## MSK Self-Guided (Web-first MVP)
+
+### Stack
+- Next.js (App Router)
+- NextAuth (Credentials)
+- Postgres + Prisma
+- Stripe Checkout + Webhook entitlements
+- Tailwind
+
+### Local setup
+1) Copy `.env.example` → `.env` and fill values
+2) Install deps:
+   `npm install`
+3) Generate Prisma client:
+   `npm run prisma:generate`
+4) Migrate DB:
+   `npm run prisma:migrate`
+5) Seed:
+   `npm run seed`
+6) Run:
+   `npm run dev`
+
+### Stripe webhook (local)
+Use Stripe CLI:
+`stripe listen --forward-to localhost:3000/api/stripe/webhook`
+Then copy webhook secret to STRIPE_WEBHOOK_SECRET
+
+### Deploy
+- Put repo on GitHub
+- Import to Vercel
+- Add env vars in Vercel
+- Use Neon/Supabase Postgres
+cp .env.example .env
+npm install
+npm run prisma:generate
+npm run prisma:migrate
+npm run seed
+npm run dev
+git init
+git add .
+git commit -m "MSK self-guided MVP"
+git branch -M main
+git remote add origin <YOUR_GITHUB_REPO_URL>
+git push -u origin main
